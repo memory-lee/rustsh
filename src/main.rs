@@ -2,7 +2,8 @@ use std::env;
 // use std::path::PathBuf;
 // use std::path::Path;
 use std::io::{self, Write, BufRead};
-use std::process::Command;
+use std::fs::{File, OpenOptions};
+use std::process::{Command, Stdio};
 
 fn main() {
     let stdin = io::stdin();
@@ -56,10 +57,27 @@ fn execute_command(parts: Vec<&str>) {
     }
 
     let program_name = parts[0];
-    let program_args = &parts[1..];
+    let mut program_args = &parts[1..];
+    let mut redirect_type: Option<&str> = None;
+    let mut output_file: Option<&str> = None;
+
+    // e.g.
+    // parts = ["ls", "-l", "-a", ">", "output.txt"]
+    // program_name = "ls"           // parts[0]
+    // program_args = ["-l"]         // parts[1..pos], where pos is the index of ">"
+    // redirect_type = ">"           // parts[pos]
+    // output_file = "output.txt"    // parts[pos + 1]
+
+    if let Some(position) = parts.iter().position(|&x| x == ">" || x == ">>") {
+        program_args = &parts[1..position];
+        redirect_type = Some(parts[position]);
+        output_file = Some(parts[position + 1]);
+    }
+
     let argc = program_args.len();
 
-    // built-in command cd & exit
+    // * built-in command cd & exit
+    // TODO: Implement `cd` with no arguments to go to home directory (~)
     if program_name == "cd" {
         // handle cd
         if argc != 1 {
@@ -94,9 +112,48 @@ fn execute_command(parts: Vec<&str>) {
     };
 
     // .status() Executes a command as a child process, waiting for it to finish and collecting its status.
-    if let Err(_) = Command::new(program)
-                            .args(program_args)
-                            .status() {
+    // if let Err(_) = Command::new(program)
+    //                         .args(program_args)
+    //                         .status() {
+    //     eprintln!("Error: invalid program");
+    // }
+
+    let result = if let Some(redir_type) = redirect_type {
+        // if redirect, open the file
+        let file_name = output_file.unwrap();
+
+        let file = if redir_type == ">" {
+            // *overwrite mode
+            File::create(file_name)
+        } else {
+            // *append mode
+            OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(file_name)
+        };
+
+        match file {
+            Ok(f) => {
+                Command::new(&program)
+                        .args(program_args)
+                        .stdout(Stdio::from(f))
+                        .status()
+            }
+            Err(_) => {
+                eprintln!("Error: invalid file");
+                return;
+            }
+        }
+    } else {
+        // no redirect, run as normal
+        Command::new(&program)
+                .args(program_args)
+                .status()
+    };
+
+    if let Err(_) = result {
         eprintln!("Error: invalid program");
     }
+
 }
